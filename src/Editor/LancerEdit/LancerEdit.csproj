@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <ImportGroup>
+        <Import Project="../../CommonVersion.props" />
+    </ImportGroup>
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <ApplicationIcon>reactor.ico</ApplicationIcon>
+        <GenerateDependencyFile>false</GenerateDependencyFile>
+    </PropertyGroup>
+
+    <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+
+    <ItemGroup>
+        <Folder Include="Properties" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Update="editorscripts\**\*.cs-script">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+        <None Remove="reactor_128.png" />
+        <EmbeddedResource Include="reactor_128.png" />
+        <None Remove="reactor_64.png" />
+        <EmbeddedResource Include="reactor_64.png" />
+        <None Remove="splash.png" />
+        <EmbeddedResource Include="splash.png" />
+        <EmbeddedResource Include="DisplayMeshes\**\*.glb" />
+        <None Update="Icons\**\*.ico">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+        <None Remove="BlueprintBackground.png" />
+        <EmbeddedResource Include="BlueprintBackground.png" />
+        <None Remove="Updater\Sfx-linux" />
+        <EmbeddedResource Include="Updater\Sfx-linux" />
+        <None Remove="Updater\Sfx-win" />
+    </ItemGroup>
+    <Import Project="..\..\PublishAssets\PublishAssets.projitems" Label="Shared" />
+</Project>

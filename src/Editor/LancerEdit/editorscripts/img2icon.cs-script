@@ -1,0 +1,45 @@
+// [Script]
+// name = Batch generate .3db icons
+// [Argument]
+// name = Type
+// type = dropdown
+// option = DXT
+// option = Uncompressed
+// [Argument]
+// name = Output Folder
+// type = folder
+// [Argument]
+// name = Files
+// type = filearray
+if(Arguments.Length < 3) {
+    Console.Error.WriteLine("usage: img2icon TYPE output-directory/ file.png ...");
+    Console.Error.WriteLine("Types: ");
+    Console.Error.WriteLine("dxt");
+    Console.Error.WriteLine("uncompressed");
+	return;
+}
+
+bool compressed = Arguments[0].Contains("dxt", StringComparison.OrdinalIgnoreCase);
+var directory = Arguments[1];
+
+Directory.CreateDirectory(directory);
+
+for(int i = 2; i < Arguments.Length; i++) {
+    var file = Arguments[i];
+    Console.WriteLine($"[{i-1}/{Arguments.Length-2}] Processing {file}");
+    var outfile = Path.Combine(directory, Path.ChangeExtension(Path.GetFileName(file),".3db"));
+    EditableUtf utf;
+    if(compressed) {
+        utf = UiIconGenerator.CompressedFromFile(Path.GetFileName(file), file, false);
+    } else {
+        utf = UiIconGenerator.UncompressedFromFile(Path.GetFileName(file), file, false);
+    }
+
+    var utfSave = utf.Save(outfile, 0);
+    PrintMessages(utfSave);
+
+    if(utfSave.IsError) {
+        Console.WriteLine($"Error writing 'outfile'.");
+        continue;
+    }
+}

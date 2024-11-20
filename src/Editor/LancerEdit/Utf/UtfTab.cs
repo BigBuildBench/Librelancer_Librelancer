@@ -1,0 +1,1031 @@
+﻿// MIT License - Copyright (c) Callum McGing
+// This file is subject to the terms and conditions defined in
+// LICENSE, which is part of this source code package
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Numerics;
+using System.IO;
+using ImGuiNET;
+using LibreLancer;
+using LibreLancer.ImUI;
+using LibreLancer.Utf.Ale;
+using LibreLancer.ContentEdit;
+using LibreLancer.ContentEdit.Model;
+using LibreLancer.Dialogs;
+using LibreLancer.Graphics;
+using LibreLancer.ImageLib;
+using LibreLancer.Utf.Cmp;
+
+namespace LancerEdit
+{
+    public partial class UtfTab : EditorTab
+    {
+        public string FilePath = null;
+        public int DirtyCountHp = 0;
+        public int DirtyCountPart = 0;
+        public EditableUtf Utf;
+        LUtfNode selectedNode = null;
+        MainWindow main;
+        PopupManager popups = new PopupManager();
+        List<JointMapView> jointViews = new List<JointMapView>();
+
+        public GameResourceManager DetachedResources;
+        public int DetachedResourceCount;
+
+        public void ReferenceDetached()
+        {
+            DetachedResourceCount++;
+        }
+
+        public void DereferenceDetached()
+        {
+            DetachedResourceCount--;
+            if (DetachedResourceCount == 0)
+                DetachedResources?.Dispose();
+        }
+        //generated parameter is used for utf generated internally, like from the collada exporter
+        //saves a bunch of copies when opening a large UTF from disk
+        public UtfTab(MainWindow main, EditableUtf utf, string title, bool generated = false)
+        {
+            this.main = main;
+            Utf = utf;
+            DocumentName = title;
+            Title = title;
+            text = new TextBuffer();
+            if(generated) utf.Source = utf.Export();
+            if (utf.Source != null)
+            {
+                main.Resources.AddResources(utf.Source, Unique.ToString());
+                utf.Source = null;
+            }
+            SaveStrategy = new UtfSaveStrategy(main, this);
+            RegisterPopups();
+            ReferenceDetached();
+        }
+        public void UpdateTitle()
+        {
+            Title = DocumentName;
+        }
+
+        ImGuiTreeNodeFlags tflags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick;
+        TextBuffer text;
+
+        public override void Dispose()
+        {
+            text.Dispose();
+            DereferenceDetached();
+            main.Resources.RemoveResourcesForId(Unique.ToString());
+        }
+
+        public string GetUtfPath()
+        {
+            if (selectedNode == null) return "None";
+            List<string> strings = new List<string>();
+            LUtfNode node = selectedNode;
+            while (node != null)
+            {
+                strings.Add(node.Name);
+                node = node.Parent;
+            }
+            strings.Reverse();
+            var path = string.Join("/", strings);
+            return path;
+        }
+
+        public void GenerateTangents()
+        {
+            try
+            {
+                LibreLancer.Utf.UtfLoader.GetDrawable(Utf.Export(), main.Resources);
+            }
+            catch  (Exception ex)
+            {
+                ErrorPopup("Could not open as model\n" + ex.Message + "\n" + ex.StackTrace);
+            }
+            Confirm("This action will overwrite any existing tangent data. Continue?", () =>
+            {
+                var result = Tangents.GenerateForUtf(Utf);
+                main.ResultMessages(result);
+                ReloadResources();
+            });
+        }
+
+        public void ReloadResources()
+        {
+            var res = DetachedResources ?? main.Resources;
+            res.RemoveResourcesForId(Unique.ToString());
+            res.AddResources(Utf.Export(), Unique.ToString());
+        }
+
+        public override void OnHotkey(Hotkeys hk, bool shiftPressed)
+        {
+            if (selectedNode == null)
+                return;
+            if (hk == Hotkeys.Copy && selectedNode != Utf.Root)
+            {
+                main.SetClipboardArray(UtfClipboard.ToBytes(selectedNode));
+            }
+            if (hk == Hotkeys.Cut && selectedNode != Utf.Root)
+            {
+                selectedNode.Parent.Children.Remove(selectedNode);
+                main.SetClipboardArray(UtfClipboard.ToBytes(selectedNode));
+            }
+
+            if (hk == Hotkeys.Paste &&
+                main.ClipboardStatus() == ClipboardContents.Array)
+            {
+                var cpy = UtfClipboard.FromBytes(main.GetClipboardArray());
+                if (cpy == null) return;
+                if (selectedNode.Data != null)
+                {
+                    Confirm("Adding children will delete this node's data. Continue?", () =>
+                    {
+                        selectedNode.Data = null;
+                        selectedNode.Children = new List<LUtfNode>();
+                        cpy.Parent = selectedNode;
+                        selectedNode.Children.Add(cpy);
+                    });
+                }
+                else
+                {
+                    selectedNode.Children ??= new List<LUtfNode>();
+                    cpy.Parent = selectedNode;
+                    selectedNode.Children.Add(cpy);
+                }
+            }
+        }
+
+        private Action dropAction = null;
+        public override void Draw(double elapsed)
+        {
+            //Child Window
+            var size = ImGui.GetWindowSize();
+            ImGui.BeginChild("##utfchild", new Vector2(size.X - 15, size.Y - 50));
+            //Layout
+            if (selectedNode != null)
+            {
+                ImGui.Columns(2, "NodeColumns", true);
+            }
+            //Headers
+            ImGui.Separator();
+            ImGui.Text("Nodes");
+            if (selectedNode != null)
+            {
+                ImGui.NextColumn();
+                ImGui.Text("Node Information");
+                ImGui.NextColumn();
+            }
+            ImGui.Separator();
+            //Tree
+            ImGui.BeginChild("##scroll");
+            var flags = selectedNode == Utf.Root ? ImGuiTreeNodeFlags.Selected | tflags : tflags;
+            var isOpen = ImGui.TreeNodeEx("/", flags);
+            if (ImGui.BeginDragDropTarget())
+            {
+                ImGuiPayloadPtr rootPtr;
+                if (AcceptDragDropPayload("_UTFNODE", ImGuiDragDropFlags.None, out rootPtr))
+                {
+                    var (sourceTab, sourceNode) = GetDragDropNode(rootPtr.Data, rootPtr.DataSize);
+                    dropAction = () =>
+                    {
+                        sourceNode.Parent.Children.Remove(sourceNode);
+                        sourceNode.Parent = Utf.Root;
+                        Utf.Root.Children.Insert(0, sourceNode);
+                        sourceTab.selectedNode = null;
+                    };
+                }
+                ImGui.EndDragDropTarget();
+            }
+
+            if (ImGui.IsItemClicked(0))
+            {
+                selectedNode = Utf.Root;
+            }
+            ImGui.PushID("/##ROOT");
+            DoNodeMenu("/##ROOT", Utf.Root, null);
+            ImGui.PopID();
+            if (isOpen)
+            {
+                for (int i = 0; i < Utf.Root.Children.Count; i++)
+                {
+                    DoNode(Utf.Root.Children[i], Utf.Root);
+                }
+                DropTarget(Utf.Root, null, "#ROOTEND#");
+                ImGui.TreePop();
+            }
+            ImGui.EndChild();
+            //
+            if (dropAction != null) {
+                dropAction();
+                dropAction = null;
+            }
+            //End Tree
+            if (selectedNode != null)
+            {
+                //Node preview
+                ImGui.NextColumn();
+                NodeInformation();
+            }
+            //Action Bar
+            ImGui.EndChild();
+            ImGui.Separator();
+            //if (ImGui.Button("Actions"))
+                //ImGui.OpenPopup("actions");
+            using (var tb = Toolbar.Begin("##actions", false))
+            {
+                if (tb.ButtonItem("View Model"))
+                {
+                    IDrawable drawable = null;
+                    ModelNodes hpn = new ModelNodes();
+                    try
+                    {
+                        drawable = LibreLancer.Utf.UtfLoader.GetDrawable(Utf.Export(), main.Resources);
+                        if(Utf.Root.Children.Any((x) => x.Name.Equals("cmpnd",StringComparison.OrdinalIgnoreCase))) {
+                            foreach(var child in Utf.Root.Children.Where((x) => x.Name.EndsWith(".3db", StringComparison.OrdinalIgnoreCase))) {
+                                var n = new ModelHpNode();
+                                n.Name = child.Name;
+                                n.Node = child;
+                                n.HardpointsNode = child.Children.FirstOrDefault((x) => x.Name.Equals("hardpoints", StringComparison.OrdinalIgnoreCase));
+                                hpn.Nodes.Add(n);
+                            }
+                            var cmpnd = Utf.Root.Children.First((x) => x.Name.Equals("cmpnd", StringComparison.OrdinalIgnoreCase));
+                            hpn.Cons = cmpnd.Children.FirstOrDefault((x) => x.Name.Equals("cons", StringComparison.OrdinalIgnoreCase));
+                        } else {
+                            var n = new ModelHpNode();
+                            n.Name = "ROOT";
+                            n.Node = Utf.Root;
+                            n.HardpointsNode = Utf.Root.Children.FirstOrDefault((x) => x.Name.Equals("hardpoints", StringComparison.OrdinalIgnoreCase));
+                            hpn.Nodes.Add(n);
+                        }
+                    }
+                    catch (Exception ex) { ErrorPopup("Could not open as model\n" + ex.Message + "\n" + ex.StackTrace); drawable = null; }
+                    if (drawable != null)
+                    {
+                        ReferenceDetached();
+                        main.AddTab(new ModelViewer(DocumentName, drawable, main, this,hpn));
+                    }
+                }
+
+                if (tb.ButtonItem("Generate Tangents"))
+                {
+                    GenerateTangents();
+                }
+
+                if (tb.ButtonItem("View Ale"))
+                {
+                    AleFile ale = null;
+                    try
+                    {
+                        ale = new AleFile(Utf.Export());
+                    }
+                    catch (Exception)
+                    {
+                        ErrorPopup("Could not open as ale");
+                        ale = null;
+                    }
+                    if (ale != null)
+                        main.AddTab(new AleViewer(Title, ale, main));
+                }
+
+                if (tb.ButtonItem("Resolve Audio Hashes"))
+                {
+                    FileDialog.ChooseFolder(folder =>
+                    {
+                        var idtable = new IDTable(folder);
+                        foreach (var n in Utf.Root.IterateAll())
+                        {
+                            if (n.Name.StartsWith("0x"))
+                            {
+                                uint v;
+                                if (uint.TryParse(n.Name.Substring(2), NumberStyles.HexNumber,
+                                        CultureInfo.InvariantCulture, out v))
+                                {
+                                    idtable.UtfNicknameTable.TryGetValue(v, out n.ResolvedName);
+                                }
+                            }
+                            else
+                                n.ResolvedName = null;
+                        }
+                    });
+                }
+                if(tb.ButtonItem("Reload Resources"))
+                {
+                    ReloadResources();
+                }
+
+                const string TooltipDetached = "Resources already detached";
+                const string TooltipToDetach =
+                    "Detaches tab from shared resources\nViewers opened will have textures+materials unique to this file.";
+                string tooltip = DetachedResources == null ? TooltipToDetach : TooltipDetached;
+                if (tb.ButtonItem("Detach Resources", DetachedResources == null, tooltip))
+                {
+                    TabColor = TabColor.Alternate;
+                    main.Resources.RemoveResourcesForId(Unique.ToString());
+                    DetachedResources = new GameResourceManager(main.Resources);
+                    DetachedResources.AddResources(Utf.Export(), Unique.ToString());
+                }
+            }
+
+            Popups();
+        }
+
+        private bool isDetached = false;
+        unsafe int DummyCallback(ImGuiInputTextCallbackData* data)
+        {
+            return 0;
+        }
+
+        unsafe void NodeInformation()
+        {
+            ImGui.BeginChild("##scrollnode");
+            ImGui.Text("Name: " + selectedNode.Name);
+            if (selectedNode.Children != null)
+            {
+                ImGui.Text(selectedNode.Children.Count + " children");
+                if (selectedNode != Utf.Root)
+                {
+                    ImGui.Separator();
+                    ImGui.Text("Actions:");
+                    if (ImGui.Button("Add Data"))
+                    {
+                        Confirm("Adding data will delete this node's children. Continue?", () =>
+                        {
+                            selectedNode.Children = null;
+                            selectedNode.Data = new byte[0];
+                        });
+                    }
+                    if (ImGui.Button("Import Data"))
+                        ImGui.OpenPopup("importactions");
+                    if (ImGui.BeginPopup("importactions"))
+                    {
+                        if (ImGui.MenuItem("File"))
+                        {
+                            Confirm("Importing data will delete this node's children. Continue?", () =>
+                            {
+                                FileDialog.Open(path =>
+                                {
+                                    selectedNode.Children = null;
+                                    selectedNode.Data = File.ReadAllBytes(path);
+                                });
+                            });
+                        }
+                        if (ImGui.MenuItem("Texture"))
+                            Confirm("Importing data will delete this node's children. Continue?", ImportTexture);
+                        ImGui.EndPopup();
+                    }
+
+                    if (selectedNode.Name.StartsWith("joint map", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (ImGui.Button("View Joint Map"))
+                        {
+                            JointMapView jmv;
+                            if((jmv = JointMapView.Create(selectedNode)) != null)
+                                jointViews.Add(jmv);
+                        };
+                    }
+
+                    if (selectedNode.Name.StartsWith("object map", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (ImGui.Button("View Object Map"))
+                        {
+                            JointMapView jmv;
+                            if((jmv = JointMapView.Create(selectedNode)) != null)
+                                jointViews.Add(jmv);
+                        };
+                    }
+                }
+            }
+            else if (selectedNode.Data != null)
+            {
+                ImGui.Text(string.Format("Size: {0}", LibreLancer.DebugDrawing.SizeSuffix(selectedNode.Data.Length)));
+                ImGui.Separator();
+                if (selectedNode.Data.Length > 0)
+                {
+                    ImGui.Text("Previews:");
+                    //String Preview
+                    ImGui.Text("String:");
+                    ImGui.SameLine();
+                    ImGui.InputText("##strpreview", selectedNode.Data, (uint)Math.Min(selectedNode.Data.Length, 32), ImGuiInputTextFlags.ReadOnly, DummyCallback);
+                    //Float Preview
+                    ImGui.Text("Float:");
+                    fixed (byte* ptr = selectedNode.Data)
+                    {
+                        for (int i = 0; i < 4 && (i < selectedNode.Data.Length / 4); i++)
+                        {
+                            ImGui.SameLine();
+                            ImGui.Text(((float*)ptr)[i].ToString());
+                        }
+                    }
+                    //Int Preview
+                    ImGui.Text("Int:");
+                    fixed (byte* ptr = selectedNode.Data)
+                    {
+                        for (int i = 0; i < 4 && (i < selectedNode.Data.Length / 4); i++)
+                        {
+                            ImGui.SameLine();
+                            ImGui.Text(((int*)ptr)[i].ToString());
+                        }
+                    }
+                }
+                else
+                {
+                    ImGui.Text("Empty Data");
+                }
+                ImGui.Separator();
+                ImGui.Text("Actions:");
+                if (ImGui.Button("Edit"))
+                {
+                    ImGui.OpenPopup("editactions");
+                }
+                if (ImGui.BeginPopup("editactions"))
+                {
+                    if (ImGui.MenuItem("String Editor"))
+                    {
+                        if (selectedNode.Data.Length > 255)
+                            popups.OpenPopup("Confirm?##stringedit");
+                        else
+                        {
+                            text.SetBytes(selectedNode.Data, selectedNode.Data.Length);
+                            popups.OpenPopup("String Editor");
+                        }
+                    }
+                    if (ImGui.MenuItem("Hex Editor"))
+                    {
+                        hexdata = new byte[selectedNode.Data.Length];
+                        selectedNode.Data.CopyTo(hexdata, 0);
+                        mem = new MemoryEditor();
+                        popups.OpenPopup("Hex Editor");
+                    }
+                    if (ImGui.MenuItem("Float Editor"))
+                    {
+                        floats = new float[selectedNode.Data.Length / 4];
+                        for (int i = 0; i < selectedNode.Data.Length / 4; i++)
+                        {
+                            floats[i] = BitConverter.ToSingle(selectedNode.Data, i * 4);
+                        }
+                        floatEditor = true;
+                    }
+                    if (ImGui.MenuItem("Int Editor"))
+                    {
+                        ints = new int[selectedNode.Data.Length / 4];
+                        for (int i = 0; i < selectedNode.Data.Length / 4; i++)
+                        {
+                            ints[i] = BitConverter.ToInt32(selectedNode.Data, i * 4);
+                        }
+                        intEditor = true;
+                    }
+                    if (ImGui.MenuItem("Color Picker"))
+                    {
+                        var len = selectedNode.Data.Length / 4;
+                        if (len < 3)
+                        {
+                            pickcolor4 = true;
+                            color4 = Color4.Black;
+                        }
+                        else if (len == 3)
+                        {
+                            pickcolor4 = false;
+                            color3 = new Vector3(
+                                BitConverter.ToSingle(selectedNode.Data, 0),
+                                BitConverter.ToSingle(selectedNode.Data, 4),
+                                BitConverter.ToSingle(selectedNode.Data, 8));
+                        }
+                        else if (len > 3)
+                        {
+                            pickcolor4 = true;
+                            color4 = new Vector4(
+                                BitConverter.ToSingle(selectedNode.Data, 0),
+                                BitConverter.ToSingle(selectedNode.Data, 4),
+                                BitConverter.ToSingle(selectedNode.Data, 8),
+                                BitConverter.ToSingle(selectedNode.Data, 12));
+                        }
+                        popups.OpenPopup("Color Picker");
+                    }
+                    ImGui.EndPopup();
+                }
+                ImGui.NextColumn();
+                if (ImGui.Button("Texture Viewer"))
+                {
+                    Texture tex = null;
+                    #if !DEBUG
+                    try
+                    {
+                    #endif
+                        using (var stream = new MemoryStream(selectedNode.Data))
+                        {
+                            if (DDS.StreamIsDDS(stream))
+                                tex = DDS.FromStream(main.RenderContext, stream);
+                            else if (LIF.StreamIsLIF(stream))
+                                tex = LIF.TextureFromStream(main.RenderContext, stream);
+                            else
+                                tex = TGA.TextureFromStream(main.RenderContext, stream);
+                        }
+                        var title = string.Format("{0} ({1})", selectedNode.Name, Title);
+                        if (tex is Texture2D tex2d)
+                        {
+                            var tab = new TextureViewer(title, tex2d, null);
+                            main.AddTab(tab);
+                        }
+                        else if (tex is TextureCube texcube)
+                        {
+                            var tab = new CubemapViewer(title, texcube, main);
+                            main.AddTab(tab);
+                        }
+                    #if !DEBUG
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorPopup("Node data couldn't be opened as texture:\n" + ex.Message);
+                    }
+                    #endif
+                }
+
+                if (main.PlayingBuffer)
+                {
+                    if (ImGui.Button("Stop Audio"))
+                        main.StopBuffer();
+                }
+                else if (ImGui.Button("Play Audio"))
+                {
+                    main.PlayBuffer(selectedNode.Data);
+                }
+
+                if (ImGui.Button("Import Data"))
+                    ImGui.OpenPopup("importactions");
+                if (ImGui.BeginPopup("importactions"))
+                {
+                    if (ImGui.MenuItem("File"))
+                    {
+                        FileDialog.Open(path => selectedNode.Data = File.ReadAllBytes(path));
+                    }
+                    if (ImGui.MenuItem("Texture"))
+                        ImportTexture();
+                    ImGui.EndPopup();
+                }
+                if (ImGui.Button("Export Data"))
+                {
+                    FileDialog.Save(path =>  File.WriteAllBytes(path, selectedNode.Data));
+                }
+                if (selectedNode.Name.ToLowerInvariant() == "vmeshdata" &&
+                    ImGui.Button("View VMeshData"))
+                {
+                    LibreLancer.Utf.Vms.VMeshData dat = null;
+                    try
+                    {
+                        dat = new LibreLancer.Utf.Vms.VMeshData(new ArraySegment<byte>(selectedNode.Data),  "");
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorPopup(string.Format("Not a valid VMeshData node\n{0}\n{1}", ex.Message, ex.StackTrace));
+                    }
+
+                    if (dat != null)
+                    {
+                        main.TextWindows.Add(new TextDisplayWindow(DumpObject.DumpVmeshData(dat), selectedNode.Name + ".txt"));
+                    }
+                }
+
+                if (selectedNode.Name.ToLowerInvariant() == "vmeshdata" &&
+                    ImGui.Button("Edit Materials"))
+                {
+                    VmsMaterialEditor dat = null;
+                    try
+                    {
+                        dat = new VmsMaterialEditor(selectedNode, main.Resources, this);
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorPopup(string.Format("Not a valid VMeshData node\n{0}\n{1}", ex.Message, ex.StackTrace));
+                    }
+                    if (dat != null)
+                        popups.OpenPopup(dat);
+                }
+
+                if (selectedNode.Name.ToLowerInvariant() == "vmeshref" &&
+                    ImGui.Button("View VMeshRef"))
+                {
+                    LibreLancer.Utf.Cmp.VMeshRef dat = null;
+                    try
+                    {
+                        dat = new LibreLancer.Utf.Cmp.VMeshRef(new ArraySegment<byte>(selectedNode.Data));
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorPopup(string.Format("Not a valid VMeshRef node\n{0}\n{1}", ex.Message, ex.StackTrace));
+                    }
+
+                    if (dat != null)
+                    {
+                        main.TextWindows.Add(new TextDisplayWindow(DumpObject.DumpVmeshRef(dat), selectedNode.Name + ".txt"));
+                    }
+                }
+            }
+            else
+            {
+                ImGui.Text("Empty");
+                ImGui.Separator();
+                ImGui.Text("Actions:");
+                if (ImGui.Button("Add Data"))
+                {
+                    selectedNode.Data = new byte[0];
+                }
+                if (ImGui.Button("Import Data"))
+                    ImGui.OpenPopup("importactions");
+                if(ImGui.BeginPopup("importactions"))
+                {
+                    if(ImGui.MenuItem("File")) {
+                        FileDialog.Open(path => selectedNode.Data = File.ReadAllBytes(path));
+                    }
+                    if(ImGui.MenuItem("Texture"))
+                        ImportTexture();
+                    ImGui.EndPopup();
+                }
+            }
+
+            var removeJmv = new List<JointMapView>();
+            foreach (var jm in jointViews)
+            {
+                if(!jm.Draw()) removeJmv.Add(jm);
+            }
+            foreach (var jmv in removeJmv) jointViews.Remove(jmv);
+            ImGui.EndChild();
+        }
+
+        void ImportTexture()
+        {
+            FileDialog.Open(path =>
+            {
+                var src = TextureImport.OpenFile(path, main.RenderContext);
+                if(src.IsError)
+                {
+                    main.ResultMessages(src);
+                }
+                else if (src.Data.Type == TexLoadType.DDS)
+                {
+                    src.Data.Texture.Dispose();
+                    selectedNode.Children = null;
+                    selectedNode.Data = File.ReadAllBytes(path);
+                }
+                else
+                {
+                    teximportprev = src.Data.Texture;
+                    teximportwarn = src.AllMessages();
+                    teximportpath = path;
+                    teximportid = ImGuiHelper.RegisterTexture(teximportprev);
+                    popups.OpenPopup("Texture Import");
+                }
+            });
+        }
+
+        LUtfNode pasteInto;
+        LUtfNode clearNode;
+
+        LUtfNode renameNode;
+
+        LUtfNode deleteNode;
+        LUtfNode deleteParent;
+
+        int addOffset = 0;
+        LUtfNode addNode;
+        LUtfNode addParent;
+
+        private bool canPaste = false;
+
+        void DoNodeMenu(string id, LUtfNode node, LUtfNode parent)
+        {
+            if (ImGui.IsItemHovered() && ImGui.IsMouseReleased(ImGuiMouseButton.Right)) {
+                canPaste = main.ClipboardStatus() == ClipboardContents.Array;
+            }
+            if (ImGui.BeginPopupContextItem(id))
+            {
+                ImGui.MenuItem(node.Name, false);
+                ImGui.MenuItem(string.Format("CRC: 0x{0:X}", CrcTool.FLModelCrc(node.Name)), false);
+                ImGui.Separator();
+                if(Theme.IconMenuItem(Icons.Edit, "Rename", node != Utf.Root))
+                {
+                    text.SetText(node.Name);
+                    renameNode = node;
+                    popups.OpenPopup("Rename Node");
+                }
+                if (Theme.IconMenuItem(Icons.TrashAlt, "Delete", node != Utf.Root))
+                {
+                    deleteParent = parent;
+                    deleteNode = node;
+                    Confirm("Are you sure you want to delete: '" + node.Name + "'?", () =>
+                    {
+                        if (selectedNode == deleteNode)
+                        {
+                            selectedNode = null;
+                        }
+                        deleteParent.Children.Remove(deleteNode);
+                    });
+                }
+                if (Theme.IconMenuItem(Icons.Eraser, "Clear", node.Children != null || node.Data != null))
+                {
+                    clearNode = node;
+                    Confirm("Clearing this node will delete all data and children. Continue?", () =>
+                    {
+                        clearNode.Data = null;
+                        if (clearNode == Utf.Root)
+                            clearNode.Children = new List<LUtfNode>();
+                        else
+                            clearNode.Children = null;
+                    });
+                }
+                ImGui.Separator();
+                if (Theme.BeginIconMenu(Icons.PlusCircle, "Add"))
+                {
+                    if (ImGui.MenuItem("Child"))
+                    {
+                        text.SetText("");
+                        addParent = null;
+                        addNode = node;
+                        if (node.Data != null)
+                        {
+                            Confirm("Adding a node will clear data. Continue?", () =>
+                            {
+                                popups.OpenPopup("New Node");
+                            });
+                        }
+                        else
+                            popups.OpenPopup("New Node");
+                    }
+                    if (ImGui.MenuItem("Before", node != Utf.Root))
+                    {
+                        text.SetText("");
+                        addParent = parent;
+                        addNode = node;
+                        addOffset = 0;
+                        popups.OpenPopup("New Node");
+                    }
+                    if (ImGui.MenuItem("After", node != Utf.Root))
+                    {
+                        text.SetText("");
+                        addParent = parent;
+                        addNode = node;
+                        addOffset = 1;
+                        popups.OpenPopup("New Node");
+                    }
+                    ImGui.EndMenu();
+                }
+                ImGui.Separator();
+                if (Theme.IconMenuItem(Icons.Cut, "Cut", node != Utf.Root))
+                {
+                    parent.Children.Remove(node);
+                    main.SetClipboardArray(UtfClipboard.ToBytes(node));
+                }
+                if (Theme.IconMenuItem(Icons.Copy, "Copy", node != Utf.Root))
+                {
+                    main.SetClipboardArray(UtfClipboard.ToBytes(node));
+                }
+                if (canPaste)
+                {
+                    if (Theme.BeginIconMenu(Icons.Paste, "Paste"))
+                    {
+                        if (ImGui.MenuItem("Before", node != Utf.Root))
+                        {
+                            var cpy = UtfClipboard.FromBytes(main.GetClipboardArray());
+                            if (cpy != null)
+                            {
+                                cpy.Parent = parent;
+                                parent.Children.Insert(parent.Children.IndexOf(node), cpy);
+                            }
+                        }
+                        if (ImGui.MenuItem("After", node != Utf.Root))
+                        {
+                            var cpy = UtfClipboard.FromBytes(main.GetClipboardArray());
+                            if (cpy != null)
+                            {
+                                cpy.Parent = parent;
+                                parent.Children.Insert(parent.Children.IndexOf(node) + 1, cpy);
+                            }
+                        }
+                        if (ImGui.MenuItem("Into"))
+                        {
+                            if (node.Data == null)
+                            {
+                                if (node.Children == null) node.Children = new List<LUtfNode>();
+                                var cpy = UtfClipboard.FromBytes(main.GetClipboardArray());
+                                if (cpy != null)
+                                {
+                                    cpy.Parent = node;
+                                    node.Children.Add(cpy);
+                                }
+                            }
+                            else
+                            {
+                                pasteInto = node;
+                                Confirm("Adding children will delete this node's data. Continue?", () =>
+                                {
+                                    pasteInto.Data = null;
+                                    pasteInto.Children = new List<LUtfNode>();
+                                    var cpy = UtfClipboard.FromBytes(main.GetClipboardArray());
+                                    if (cpy != null)
+                                    {
+                                        cpy.Parent = pasteInto;
+                                        pasteInto.Children.Add(cpy);
+                                    }
+                                });
+                            }
+                        }
+                        ImGui.EndMenu();
+                    }
+                }
+                else
+                {
+                    Theme.IconMenuItem(Icons.Paste, "Paste", false);
+                }
+                ImGui.EndPopup();
+            }
+        }
+
+        static unsafe bool AcceptDragDropPayload(string type, ImGuiDragDropFlags flags, out ImGuiPayloadPtr ptr)
+        {
+            return (ptr = ImGui.AcceptDragDropPayload(type, flags)).NativePtr != null;
+        }
+
+        private int[] dragDropBuffer = new int[256];
+        Span<int> GetDragDropPath(LUtfNode node)
+        {
+            LUtfNode n = node;
+            int idx = 0;
+            dragDropBuffer[idx++] = (int)(Unique & uint.MaxValue);
+            dragDropBuffer[idx++] = (int)(Unique >> 32);
+            while (n != Utf.Root)
+            {
+                var x = n.Parent.Children.IndexOf(n);
+                if (x == -1)
+                    throw new Exception("Parent not set correctly, invalid internal state");
+                dragDropBuffer[idx++] = x;
+                n = n.Parent;
+            }
+            dragDropBuffer.AsSpan().Slice(2, idx - 2).Reverse();
+            return dragDropBuffer.AsSpan().Slice(0, idx);
+        }
+
+        unsafe (UtfTab, LUtfNode) GetDragDropNode(IntPtr data, int dataLen)
+        {
+            var payload = new Span<int>((void*)data, dataLen / sizeof(int));
+            long tabId = payload[1];
+            tabId <<= 32;
+            tabId |= (uint)payload[0];
+            var tab = main.TabControl.Tabs.OfType<UtfTab>().FirstOrDefault(x => x.Unique == tabId);
+            if (tab == null)
+                throw new Exception("Dragged from closed tab?");
+            var n = tab.Utf.Root;
+            for (int i = 2; i < payload.Length; i++)
+                n = n.Children[payload[i]];
+            return (tab, n);
+        }
+
+        bool DragDropAllowed(LUtfNode sourceNode, LUtfNode targetNode)
+        {
+            LUtfNode n = targetNode;
+            while (n.Parent != null)
+            {
+                if (n.Parent == sourceNode)
+                    return false;
+                n = n.Parent;
+            }
+            return true;
+        }
+
+        void DropTarget(LUtfNode parent, LUtfNode sibling, string id)
+        {
+            if (main.DrawDragTargets)
+            {
+                ImGui.PushID($"{id};dropTarget;{sibling?.Name ?? "///NULL"}");
+                ImGuiExt.SeparatorEx(1 | (1 << 2), 3);
+                if (ImGui.BeginDragDropTarget())
+                {
+                    if (AcceptDragDropPayload("_UTFNODE", ImGuiDragDropFlags.None, out var ptr))
+                    {
+                        var (sourceTab, sourceNode) = GetDragDropNode(ptr.Data, ptr.DataSize);
+                        if (DragDropAllowed(sourceNode, parent)) {
+                            if (sourceNode != sibling)
+                            {
+                                dropAction = () =>
+                                {
+                                    sourceNode.Parent.Children.Remove(sourceNode);
+                                    sourceNode.Parent = parent;
+                                    if (sibling == null)
+                                        parent.Children.Add(sourceNode);
+                                    else
+                                        parent.Children.Insert(parent.Children.IndexOf(sibling), sourceNode);
+                                    sourceTab.selectedNode = null;
+                                };
+                            }
+                        }
+                    }
+                    if (AcceptDragDropPayload("_UTFNODE",
+                            ImGuiDragDropFlags.AcceptBeforeDelivery | ImGuiDragDropFlags.AcceptNoPreviewTooltip,
+                            out ptr))
+                    {
+                        var (_, sourceNode) = GetDragDropNode(ptr.Data, ptr.DataSize);
+                        if (!DragDropAllowed(sourceNode, parent)) {
+                            ImGui.SetTooltip("Cannot move parent to child");
+                            ImGui.SetMouseCursor(ImGuiMouseCursor.NotAllowed);
+                        }
+                    }
+                    ImGui.EndDragDropTarget();
+                }
+                ImGui.PopID();
+            }
+        }
+
+        unsafe void DoNode(LUtfNode node, LUtfNode parent)
+        {
+            string id = ImGuiExt.IDWithExtra(node.Name, node.InterfaceID);
+
+            DropTarget(parent, node, id);
+
+            var empty = node.Data == null && node.Children == null;
+            var flags = (node == selectedNode ? ImGuiTreeNodeFlags.Selected : 0)
+                        | (node.Children == null ? (ImGuiTreeNodeFlags.Bullet | ImGuiTreeNodeFlags.Leaf) : 0)
+                        | tflags;
+            if(empty)
+                ImGui.PushStyleColor(ImGuiCol.Text, Color4.Orange);
+            var isOpen = ImGui.TreeNodeEx(id, flags);
+            if (empty) {
+                ImGui.PopStyleColor();
+                ImGui.SetItemTooltip("Node is empty and cannot be saved. Add data or children");
+            }
+            if (ImGui.IsItemClicked(0))
+            {
+                selectedNode = node;
+            }
+
+            if (ImGui.BeginDragDropTarget())
+            {
+                ImGuiPayloadPtr ptr;
+                //0: into
+                //1: insert after
+                if (AcceptDragDropPayload("_UTFNODE", ImGuiDragDropFlags.None, out ptr))
+                {
+                    var (sourceTab, sourceNode) = GetDragDropNode(ptr.Data, ptr.DataSize);
+                    if (DragDropAllowed(sourceNode, node))
+                    {
+                        var act = () =>
+                        {
+                            sourceNode.Parent.Children.Remove(sourceNode);
+                            sourceNode.Parent = node;
+                            node.Data = null;
+                            node.Children ??= new List<LUtfNode>();
+                            node.Children.Insert(0, sourceNode);
+                            sourceTab.selectedNode = null;
+                        };
+                        if (node.Data != null)
+                            Confirm("Adding children will delete this node's data. Continue?", () =>
+                                dropAction = act);
+                        else
+                            dropAction = act;
+                    }
+                }
+
+                if (AcceptDragDropPayload("_UTFNODE",
+                        ImGuiDragDropFlags.AcceptBeforeDelivery | ImGuiDragDropFlags.AcceptNoPreviewTooltip,
+                        out ptr))
+                {
+                    var (_, sourceNode) = GetDragDropNode(ptr.Data, ptr.DataSize);
+                    if (!DragDropAllowed(sourceNode, node))
+                    {
+                        ImGui.SetTooltip("Can't move parent into child");
+                        ImGui.SetMouseCursor(ImGuiMouseCursor.NotAllowed);
+                    }
+                }
+                ImGui.EndDragDropTarget();
+            }
+            if (ImGui.BeginDragDropSource())
+            {
+                var path = GetDragDropPath(node);
+                fixed(int* buffer = &path.GetPinnableReference())
+                    ImGui.SetDragDropPayload("_UTFNODE", (IntPtr)buffer, (uint)(path.Length * sizeof(int)));
+                ImGui.TextUnformatted(node.Name);
+                ImGui.EndDragDropSource();
+            }
+            if (node.ResolvedName != null)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled("(" + ImGuiExt.IDSafe(node.ResolvedName) + ")");
+            }
+            ImGui.PushID(id);
+            DoNodeMenu(id, node, parent);
+            ImGui.PopID();
+            if (node.Children != null && isOpen)
+            {
+                for (int i = 0; i < node.Children.Count; i++)
+                {
+                    DoNode(node.Children[i], node);
+                }
+                DropTarget(node, null, id);
+            }
+            if (isOpen)
+                ImGui.TreePop();
+
+
+        }
+    }
+}

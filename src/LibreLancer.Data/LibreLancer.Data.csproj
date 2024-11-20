@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ImportGroup>
+    <Import Project="../CommonVersion.props" />
+  </ImportGroup>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Version>0.0.1</Version>
+    <Title>Librelancer INI data project</Title>
+    <Authors>Librelancer contributors</Authors>
+    <Copyright>Copyright (c) Callum McGing, Librelancer Contributors 2013-2024</Copyright>
+    <PackageProjectUrl>https://librelancer.net/</PackageProjectUrl>
+    <PackageLicenseUrl>https://github.com/Librelancer/Librelancer/blob/main/LICENSE</PackageLicenseUrl>
+    <RepositoryUrl>https://github.com/Librelancer/Librelancer</RepositoryUrl>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <NoWarn>1701;1702;0649</NoWarn>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <NoWarn>1701;1702;0649</NoWarn>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Folder Include="Properties" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Storyline\Storyline.default.ini" />
+    <EmbeddedResource Include="Storyline\Storyline.default.ini">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

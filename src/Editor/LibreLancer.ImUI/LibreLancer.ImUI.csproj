@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+      <Compile Include="..\..\..\extern\ImGui.NET\src\ImGui.NET\**\*.cs" LinkBase="ImGui.NET" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Properties" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="checkerboard.png" />
+    <EmbeddedResource Include="checkerboard.png" />
+    <None Remove="Roboto-Medium.ttf" />
+    <EmbeddedResource Include="Roboto-Medium.ttf" />
+    <None Remove="fa-solid-900.ttf" />
+    <EmbeddedResource Include="fa-solid-900.ttf" />
+    <None Remove="empty-bullet.ttf" />
+    <EmbeddedResource Include="empty-bullet.ttf" />
+    <None Remove="bell.ogg" />
+    <EmbeddedResource Include="bell.ogg" />
+    <None Remove="file.png" />
+    <EmbeddedResource Include="file.png" />
+    <None Remove="folder.png" />
+    <EmbeddedResource Include="folder.png" />
+  </ItemGroup>
+
+</Project>

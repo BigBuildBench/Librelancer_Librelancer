@@ -1,0 +1,55 @@
+[submodule "extern/SharpFont"]
+	path = extern/SharpFont
+	url = https://github.com/Robmaister/SharpFont.git
+[submodule "extern/StbSharp"]
+	path = extern/StbSharp
+	url = https://github.com/rds1983/StbSharp
+[submodule "extern/lidgren-network-gen3"]
+	path = extern/lidgren-network-gen3
+	url = https://github.com/CallumDev/lidgren-network-gen3
+[submodule "extern/ImGui.NET"]
+	path = extern/ImGui.NET
+	url = https://github.com/mellinoe/ImGui.NET
+[submodule "extern/cimgui"]
+	path = extern/cimgui
+	url = https://github.com/cimgui/cimgui
+[submodule "extern/ImGuiColorTextEdit"]
+	path = extern/ImGuiColorTextEdit
+	url = https://github.com/pthom/ImGuiColorTextEdit
+[submodule "extern/lua"]
+	path = extern/lua
+	url = https://github.com/lua/lua
+	branch = v5.3
+[submodule "extern/crunch"]
+	path = extern/crunch
+	url = https://github.com/DaemonEngine/crunch
+[submodule "extern/thorncompiler"]
+	path = extern/thorncompiler
+	url = https://github.com/Librelancer/thorncompiler
+[submodule "extern/lancerdecode"]
+	path = extern/lancerdecode
+	url = https://github.com/Librelancer/lancerdecode
+[submodule "extern/SimpleMesh"]
+	path = extern/SimpleMesh
+	url = https://github.com/CallumDev/SimpleMesh
+[submodule "extern/LiteNetLib"]
+	path = extern/LiteNetLib
+	url = https://github.com/RevenantX/LiteNetLib
+[submodule "extern/wattlescript"]
+	path = extern/wattlescript
+	url = https://github.com/WattleScript/wattlescript
+[submodule "extern/glslang"]
+	path = extern/glslang
+	url = https://github.com/KhronosGroup/glslang
+[submodule "extern/SPIRV-Cross"]
+	path = extern/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross
+[submodule "extern/bepuphysics2"]
+	path = extern/bepuphysics2
+	url = https://github.com/bepu/bepuphysics2
+[submodule "extern/nativefiledialog-extended"]
+	path = extern/nativefiledialog-extended
+	url = https://github.com/btzy/nativefiledialog-extended
+[submodule "extern/imgui-node-editor"]
+	path = extern/imgui-node-editor
+	url = https://github.com/thedmd/imgui-node-editor
